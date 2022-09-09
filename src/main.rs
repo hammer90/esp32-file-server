@@ -142,7 +142,6 @@ fn main() -> Result<()> {
     // Bind the log crate to the ESP Logging facilities
     esp_idf_svc::log::EspLogger::initialize_default();
 
-
     let peripherals = Peripherals::take().ok_or(anyhow!("no input pins"))?;
 
     let pins = SdPins {
@@ -233,6 +232,13 @@ impl Streamable for ReadableFile {
 }
 
 fn read_file(name: &str) -> Result<Response> {
+    if name.starts_with(".") {
+        return Ok(Response::fixed_string(
+            404,
+            None,
+            &format!("File '{}' does not exist", name),
+        ));
+    }
     let file = File::open(format!("/DATA/{}", name))?;
     Ok(Response {
         status: 200,
@@ -242,6 +248,13 @@ fn read_file(name: &str) -> Result<Response> {
 }
 
 fn file_size(name: &str) -> Result<Response> {
+    if name.starts_with(".") {
+        return Ok(Response::fixed_string(
+            404,
+            None,
+            &format!("File '{}' does not exist", name),
+        ));
+    }
     let size = fs::metadata(format!("/DATA/{}", name))?.len();
     Ok(Response::fixed_string(
         200,
@@ -264,7 +277,10 @@ fn files() -> Result<Response> {
                 break;
             }
             let name = CStr::from_ptr(&(*dir).d_name[0]);
-            files.push(name.to_string_lossy().to_string());
+            let file_name = name.to_string_lossy().to_string();
+            if !file_name.starts_with(".") {
+                files.push(name.to_string_lossy().to_string());
+            }
         }
     }
     Ok(Response::fixed_string(
@@ -351,7 +367,7 @@ fn start_server() -> Result<SpawnedRestServer, HttpError> {
 }
 
 fn load_wifi_config() -> Result<WifiConfig> {
-    let file = BufReader::new(File::open("/DATA/config")?);
+    let file = BufReader::new(File::open("/DATA/.config")?);
     let lines = file.lines();
 
     let mut ssid = None;
@@ -396,7 +412,7 @@ fn wifi(
     info!("Wifi created, about to connect...");
 
     let config = load_wifi_config()?;
-    println!("{:?}",config);
+    println!("{:?}", config);
     wifi.set_configuration(&Configuration::Client(ClientConfiguration {
         ssid: config.ssid.into(),
         password: config.pw.into(),

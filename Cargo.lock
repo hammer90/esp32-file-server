@@ -300,7 +300,7 @@ checksum = "e78d4f1cc4ae33bbfc157ed5d5a5ef3bc29227303d595861deb238fcec4e9457"
 [[package]]
 name = "embeddable_rest_server"
 version = "0.1.0"
-source = "git+https://github.com/hammer90/embeddable-rest-server#6c1db1f7a8283c20f07db944a3c39c673a643052"
+source = "git+https://github.com/hammer90/embeddable-rest-server#6837db91eaf1dd9d4007e7d020ef72c8c4b9431a"
 
 [[package]]
 name = "embedded-hal"

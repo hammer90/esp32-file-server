@@ -328,7 +328,7 @@ impl RequestHandler for FileWriter {
 }
 
 fn start_server() -> Result<SpawnedRestServer, HttpError> {
-    let server = RestServer::new("0.0.0.0:8080", 1024, 0)?
+    let server = RestServer::new("0.0.0.0".to_string(), 8080, 1024, 0)?
         .get("files", |req, context| {
             SimpleHandler::new(req, context, |_, _, _| {
                 let res = files();

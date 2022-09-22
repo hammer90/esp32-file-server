@@ -3,12 +3,13 @@
 use std::collections::HashMap;
 use std::ffi::{CStr, CString};
 use std::fs::{self, File};
-use std::io::{BufRead, BufReader, ErrorKind, Read, Write};
+use std::io::{ErrorKind, Read, Write};
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, bail, Result};
+use serde::{Deserialize, Serialize};
 
 use embeddable_rest_server::{
     BodyType, FixedHandler, HandlerResult, HttpError, RequestHandler, Response, RestServer,
@@ -178,7 +179,7 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-#[derive(Debug)]
+#[derive(Debug, Deserialize, Serialize)]
 struct WifiConfig {
     ssid: String,
     pw: String,
@@ -397,34 +398,9 @@ fn start_server() -> Result<SpawnedRestServer, HttpError> {
 }
 
 fn load_wifi_config() -> Result<WifiConfig> {
-    let file = BufReader::new(File::open("/DATA/.config")?);
-    let lines = file.lines();
-
-    let mut ssid = None;
-    let mut pw = None;
-
-    for line in lines {
-        if let Ok(line) = line {
-            if let Some((key, value)) = line.split_once('=') {
-                match key {
-                    "SSID" => ssid = Some(value.to_owned()),
-                    "PW" => pw = Some(value.to_owned()),
-                    _ => (),
-                }
-                match (&ssid, &pw) {
-                    (Some(ssid), Some(pw)) => {
-                        return Ok(WifiConfig {
-                            ssid: ssid.to_owned(),
-                            pw: pw.to_owned(),
-                        })
-                    }
-                    _ => (),
-                }
-            }
-        }
-    }
-
-    bail!(format!("invalid config: ssid: {:?}, pw: {:?}", ssid, pw))
+    let file = fs::read_to_string("/DATA/.config.ron")?;
+    let config: WifiConfig = ron::from_str(&file)?;
+    Ok(config)
 }
 
 fn duration_since_boot() -> Duration {

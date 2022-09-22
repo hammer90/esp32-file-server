@@ -34,6 +34,8 @@ esp-idf-hal = "0.36"
 embedded-svc = "0.20"
 embedded-hal = "0.2"
 embeddable_rest_server = { git = "https://github.com/hammer90/embeddable-rest-server" }
+ron = "0.8"
+serde = { version = "1", features = ["derive"] }
 
 [build-dependencies]
 embuild = "0.28.2"

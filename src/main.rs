@@ -1,7 +1,7 @@
 #![allow(clippy::single_component_path_imports)]
 
 use std::collections::HashMap;
-use std::ffi::{CStr, CString};
+use std::ffi::{CString};
 use std::fs::{self, File};
 use std::io::{ErrorKind, Read, Write};
 use std::sync::Arc;
@@ -25,7 +25,7 @@ use esp_idf_hal::gpio::{Gpio12, Gpio13, Gpio14, Gpio15, Gpio2, Gpio4, Input, Pul
 use esp_idf_hal::peripherals::Peripherals;
 use esp_idf_sys::{
     self, c_types, esp, esp_vfs_fat_sdcard_unmount, esp_vfs_fat_sdmmc_mount,
-    esp_vfs_fat_sdmmc_mount_config_t, opendir, readdir, sdmmc_card_t, sdmmc_host_deinit,
+    esp_vfs_fat_sdmmc_mount_config_t, sdmmc_card_t, sdmmc_host_deinit,
     sdmmc_host_do_transaction, sdmmc_host_get_slot_width, sdmmc_host_init,
     sdmmc_host_io_int_enable, sdmmc_host_io_int_wait, sdmmc_host_set_bus_ddr_mode,
     sdmmc_host_set_bus_width, sdmmc_host_set_card_clk, sdmmc_host_t, sdmmc_slot_config_t,
@@ -38,6 +38,9 @@ use embedded_svc::ipv4::ClientConfiguration::*;
 use embedded_svc::ipv4::DHCPClientSettings;
 use embedded_svc::wifi::*;
 use esp_idf_svc::nvs::*;
+
+mod readdir;
+use readdir::Files;
 
 pub fn cp_str(s: &str) -> Result<[c_types::c_char; 32]> {
     assert!(s.len() < 32);
@@ -295,25 +298,9 @@ fn file_size(name: &str) -> Result<Response> {
 }
 
 fn files() -> Result<Response> {
-    let mut files: Vec<String> = vec![];
-    let p = CString::new("/DATA")?;
-    unsafe {
-        let ptr = opendir(p.as_ptr());
-        if ptr.is_null() {
-            bail!("opendir returned null");
-        }
-        loop {
-            let dir = readdir(ptr);
-            if dir.is_null() {
-                break;
-            }
-            let name = CStr::from_ptr(&(*dir).d_name[0]);
-            let file_name = name.to_string_lossy().to_string();
-            if !file_name.starts_with(".") {
-                files.push(name.to_string_lossy().to_string());
-            }
-        }
-    }
+    let files: Vec<String> = Files::new("/DATA")?
+        .filter(|file| !file.starts_with('.'))
+        .collect();
     Ok(Response::fixed_string(
         200,
         None,

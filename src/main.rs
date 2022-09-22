@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::ffi::{CStr, CString};
 use std::fs::{self, File};
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{BufRead, BufReader, ErrorKind, Read, Write};
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -239,12 +239,27 @@ fn read_file(name: &str) -> Result<Response> {
             &format!("File '{}' does not exist", name),
         ));
     }
-    let file = File::open(format!("/DATA/{}", name))?;
-    Ok(Response {
-        status: 200,
-        body: BodyType::StreamWithTrailers(Box::new(ReadableFile::new(file, 1024))),
-        headers: None,
-    })
+    let file = File::open(format!("/DATA/{}", name));
+    match file {
+        Ok(file) => Ok(Response {
+            status: 200,
+            body: BodyType::StreamWithTrailers(Box::new(ReadableFile::new(file, 1024))),
+            headers: None,
+        }),
+        Err(e) => match e.kind() {
+            ErrorKind::NotFound => Ok(Response::fixed_string(
+                404,
+                None,
+                &format!("File '{}' does not exist", name),
+            )),
+            ErrorKind::PermissionDenied => Ok(Response::fixed_string(
+                403,
+                None,
+                &format!("Access to file '{}' not allowed", name),
+            )),
+            _ => bail!(e),
+        },
+    }
 }
 
 fn file_size(name: &str) -> Result<Response> {
@@ -255,12 +270,27 @@ fn file_size(name: &str) -> Result<Response> {
             &format!("File '{}' does not exist", name),
         ));
     }
-    let size = fs::metadata(format!("/DATA/{}", name))?.len();
-    Ok(Response::fixed_string(
-        200,
-        None,
-        format!("{}\r\n", size).as_str(),
-    ))
+    let meta = fs::metadata(format!("/DATA/{}", name));
+    match meta {
+        Ok(meta) => Ok(Response::fixed_string(
+            200,
+            None,
+            format!("{}\r\n", meta.len()).as_str(),
+        )),
+        Err(e) => match e.kind() {
+            ErrorKind::NotFound => Ok(Response::fixed_string(
+                404,
+                None,
+                &format!("File '{}' does not exist", name),
+            )),
+            ErrorKind::PermissionDenied => Ok(Response::fixed_string(
+                403,
+                None,
+                &format!("Access to file '{}' not allowed", name),
+            )),
+            _ => bail!(e),
+        },
+    }
 }
 
 fn files() -> Result<Response> {

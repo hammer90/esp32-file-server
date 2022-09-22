@@ -1,7 +1,7 @@
 #![allow(clippy::single_component_path_imports)]
 
 use std::collections::HashMap;
-use std::ffi::{CString};
+use std::ffi::CString;
 use std::fs::{self, File};
 use std::io::{ErrorKind, Read, Write};
 use std::sync::Arc;
@@ -25,11 +25,10 @@ use esp_idf_hal::gpio::{Gpio12, Gpio13, Gpio14, Gpio15, Gpio2, Gpio4, Input, Pul
 use esp_idf_hal::peripherals::Peripherals;
 use esp_idf_sys::{
     self, c_types, esp, esp_vfs_fat_sdcard_unmount, esp_vfs_fat_sdmmc_mount,
-    esp_vfs_fat_sdmmc_mount_config_t, sdmmc_card_t, sdmmc_host_deinit,
-    sdmmc_host_do_transaction, sdmmc_host_get_slot_width, sdmmc_host_init,
-    sdmmc_host_io_int_enable, sdmmc_host_io_int_wait, sdmmc_host_set_bus_ddr_mode,
-    sdmmc_host_set_bus_width, sdmmc_host_set_card_clk, sdmmc_host_t, sdmmc_slot_config_t,
-    sdmmc_slot_config_t__bindgen_ty_1, sdmmc_slot_config_t__bindgen_ty_2,
+    esp_vfs_fat_sdmmc_mount_config_t, sdmmc_card_t, sdmmc_host_deinit, sdmmc_host_do_transaction,
+    sdmmc_host_get_slot_width, sdmmc_host_init, sdmmc_host_io_int_enable, sdmmc_host_io_int_wait,
+    sdmmc_host_set_bus_ddr_mode, sdmmc_host_set_bus_width, sdmmc_host_set_card_clk, sdmmc_host_t,
+    sdmmc_slot_config_t, sdmmc_slot_config_t__bindgen_ty_1, sdmmc_slot_config_t__bindgen_ty_2,
 };
 
 use esp_idf_svc::wifi::*;
@@ -146,7 +145,7 @@ fn main() -> Result<()> {
     // Bind the log crate to the ESP Logging facilities
     esp_idf_svc::log::EspLogger::initialize_default();
 
-    let peripherals = Peripherals::take().ok_or(anyhow!("no input pins"))?;
+    let peripherals = Peripherals::take().ok_or_else(|| anyhow!("no input pins"))?;
 
     let pins = SdPins {
         cmd: peripherals.pins.gpio15.into_input()?,
@@ -162,11 +161,7 @@ fn main() -> Result<()> {
     let sys_loop_stack = Arc::new(EspSysLoopStack::new()?);
     let default_nvs = Arc::new(EspDefaultNvs::new()?);
 
-    let _wifi = wifi(
-        netif_stack.clone(),
-        sys_loop_stack.clone(),
-        default_nvs.clone(),
-    )?;
+    let _wifi = wifi(netif_stack, sys_loop_stack, default_nvs)?;
 
     let _sntp = sntp::EspSntp::new_default()?;
     info!("SNTP initialized");
@@ -213,12 +208,10 @@ impl Iterator for ReadableFile {
         match read {
             Err(err) => {
                 self.err = Some(format!("{}", err));
-                return None;
+                None
             }
             Ok(0) => None,
-            Ok(count) => {
-                return Some(buf[0..count].to_vec());
-            }
+            Ok(count) => Some(buf[0..count].to_vec()),
         }
     }
 }
@@ -231,12 +224,12 @@ impl Streamable for ReadableFile {
     fn trailers(&self) -> Vec<(String, String)> {
         self.err
             .as_ref()
-            .map_or_else(|| vec![], |err| vec![("err".to_string(), err.to_string())])
+            .map_or_else(Vec::new, |err| vec![("err".to_string(), err.to_string())])
     }
 }
 
 fn read_file(name: &str) -> Result<Response> {
-    if name.starts_with(".") {
+    if name.starts_with('.') {
         return Ok(Response::fixed_string(
             404,
             None,
@@ -267,7 +260,7 @@ fn read_file(name: &str) -> Result<Response> {
 }
 
 fn file_size(name: &str) -> Result<Response> {
-    if name.starts_with(".") {
+    if name.starts_with('.') {
         return Ok(Response::fixed_string(
             404,
             None,
@@ -381,7 +374,7 @@ fn start_server() -> Result<SpawnedRestServer, HttpError> {
                 Ok(writer) => Box::new(writer),
             }
         })?;
-    Ok(SpawnedRestServer::spawn(server, 8192)?)
+    SpawnedRestServer::spawn(server, 8192)
 }
 
 fn load_wifi_config() -> Result<WifiConfig> {
@@ -407,8 +400,8 @@ fn wifi(
     let config = load_wifi_config()?;
     println!("{:?}", config);
     wifi.set_configuration(&Configuration::Client(ClientConfiguration {
-        ssid: config.ssid.into(),
-        password: config.pw.into(),
+        ssid: config.ssid,
+        password: config.pw,
         ip_conf: Some(DHCP(DHCPClientSettings {
             hostname: Some("fileserver".into()),
         })),

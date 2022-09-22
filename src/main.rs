@@ -425,7 +425,7 @@ fn wifi(
     wifi.wait_status_with_timeout(Duration::from_secs(20) + duration_since_boot(), |status| {
         !status.is_transitional()
     })
-    .map_err(|e| anyhow::anyhow!("Unexpected Wifi status: {:?}", e))?;
+    .map_err(|e| anyhow::anyhow!("Unexpected Wifi status while waiting: {:?}", e))?;
 
     let status = wifi.get_status();
 
@@ -438,7 +438,7 @@ fn wifi(
     {
         info!("Wifi connected");
     } else {
-        bail!("Unexpected Wifi status: {:?}", status);
+        bail!("Unexpected Wifi status after waiting: {:?}", status);
     }
     Ok(wifi)
 }

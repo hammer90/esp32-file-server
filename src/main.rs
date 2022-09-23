@@ -24,14 +24,14 @@ use log::*;
 use esp_idf_hal::gpio::{Gpio12, Gpio13, Gpio14, Gpio15, Gpio2, Gpio4, Input, Pull};
 use esp_idf_hal::peripherals::Peripherals;
 use esp_idf_sys::{
-    self, c_types, esp, esp_vfs_fat_mount_config_t, esp_vfs_fat_register,
-    esp_vfs_fat_sdcard_unmount, esp_vfs_fat_sdmmc_mount, esp_vfs_fat_sdmmc_mount_config_t, f_mount,
-    ff_diskio_get_drive, ff_diskio_register_sdmmc, sdmmc_card_init, sdmmc_card_t,
+    self, c_types, esp_vfs_fat_mount_config_t, esp_vfs_fat_register,
+    esp_vfs_fat_sdcard_unmount, esp_vfs_fat_sdmmc_mount_config_t, f_mount,
+    ff_diskio_get_drive, ff_diskio_register_sdmmc, malloc, sdmmc_card_init, sdmmc_card_t,
     sdmmc_host_deinit, sdmmc_host_do_transaction, sdmmc_host_get_slot_width, sdmmc_host_init,
     sdmmc_host_init_slot, sdmmc_host_io_int_enable, sdmmc_host_io_int_wait,
     sdmmc_host_set_bus_ddr_mode, sdmmc_host_set_bus_width, sdmmc_host_set_card_clk, sdmmc_host_t,
     sdmmc_slot_config_t, sdmmc_slot_config_t__bindgen_ty_1, sdmmc_slot_config_t__bindgen_ty_2,
-    FATFS,
+    uxTaskGetStackHighWaterMark, TaskHandle_t, FATFS,
 };
 
 use esp_idf_svc::wifi::*;
@@ -142,59 +142,73 @@ fn vfs_fat_sdmmc_mount(
     slot_config: *const sdmmc_slot_config_t,
     _mount_config: *const esp_vfs_fat_mount_config_t,
 ) -> Result<sdmmc_card_t> {
-    let mut fatfs: FATFS = FATFS {
-        ..Default::default()
-    };
-
     let mut drv = 0xFF_u8;
     unsafe {
-        let mut card: sdmmc_card_t = sdmmc_card_t {
-            ..Default::default()
-        };
+        let p: TaskHandle_t = std::ptr::null_mut();
+        info!("vfs_fat_sdmmc_mount {}", uxTaskGetStackHighWaterMark(p));
+        let size = std::mem::size_of::<sdmmc_card_t>();
+        info!("sizeof(sdmmc_card_t) = {}", size);
+        let pcard = malloc(size.try_into().unwrap_or(136)) as *mut sdmmc_card_t;
         let pdrv: *mut u8 = &mut drv;
+
+        info!(
+            "call ff_diskio_get_drive now {}",
+            uxTaskGetStackHighWaterMark(p)
+        );
         let err = ff_diskio_get_drive(pdrv);
         if err != 0 {
             bail!("failed to ff_diskio_get_drive {}", err);
         }
         info!("got drive '{}'", drv);
+        info!("call init now {}", uxTaskGetStackHighWaterMark(p));
         if let Some(init) = (*host_config).init {
-            info!("call init now");
             let err = init();
             if err != 0 {
                 bail!("failed to init host {}", err);
             }
         }
-        info!("call sdmmc_host_init_slot now");
+        info!(
+            "call sdmmc_host_init_slot now {}",
+            uxTaskGetStackHighWaterMark(p)
+        );
         let err = sdmmc_host_init_slot((*host_config).slot, slot_config);
         if err != 0 {
             bail!("failed to sdmmc_host_init_slot {}", err);
         }
-        let pcard: *mut sdmmc_card_t = &mut card;
-        info!("call sdmmc_card_init now");
+        info!(
+            "call sdmmc_card_init now {}",
+            uxTaskGetStackHighWaterMark(p)
+        );
         let err = sdmmc_card_init(host_config, pcard);
         if err != 0 {
             bail!("failed to sdmmc_card_init {}", err);
         }
         // ________________
         // mount_to_vfs_fat
-        info!("call ff_diskio_register_sdmmc now");
+        info!(
+            "call ff_diskio_register_sdmmc now {}",
+            uxTaskGetStackHighWaterMark(p)
+        );
         ff_diskio_register_sdmmc(drv, pcard);
 
-        let mut pfatfs: *mut FATFS = &mut fatfs;
+        let mut pfatfs: *mut FATFS = std::ptr::null_mut();
         let ppfatfs: *mut *mut FATFS = &mut pfatfs;
         let fat_drive: [i8; 3] = [(0x30 + drv).try_into().unwrap(), 0x3a, 0];
-        info!("call esp_vfs_fat_register now");
+        info!(
+            "call esp_vfs_fat_register now {}",
+            uxTaskGetStackHighWaterMark(p)
+        );
         let err = esp_vfs_fat_register(base_path, &fat_drive as *const i8, 8, ppfatfs);
         if err != 0 {
             bail!("failed to esp_vfs_fat_register {}", err);
         }
 
-        info!("call f_mount now");
+        info!("call f_mount now {}", uxTaskGetStackHighWaterMark(p));
         let err = f_mount(pfatfs, base_path, 1);
         if err != 0 {
             bail!("failed to f_mount {}", err);
         }
-        Ok(card)
+        Ok(*pcard)
     }
 }
 

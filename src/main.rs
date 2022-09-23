@@ -24,11 +24,14 @@ use log::*;
 use esp_idf_hal::gpio::{Gpio12, Gpio13, Gpio14, Gpio15, Gpio2, Gpio4, Input, Pull};
 use esp_idf_hal::peripherals::Peripherals;
 use esp_idf_sys::{
-    self, c_types, esp, esp_vfs_fat_sdcard_unmount, esp_vfs_fat_sdmmc_mount,
-    esp_vfs_fat_sdmmc_mount_config_t, sdmmc_card_t, sdmmc_host_deinit, sdmmc_host_do_transaction,
-    sdmmc_host_get_slot_width, sdmmc_host_init, sdmmc_host_io_int_enable, sdmmc_host_io_int_wait,
+    self, c_types, esp, esp_vfs_fat_mount_config_t, esp_vfs_fat_register,
+    esp_vfs_fat_sdcard_unmount, esp_vfs_fat_sdmmc_mount, esp_vfs_fat_sdmmc_mount_config_t, f_mount,
+    ff_diskio_get_drive, ff_diskio_register_sdmmc, sdmmc_card_init, sdmmc_card_t,
+    sdmmc_host_deinit, sdmmc_host_do_transaction, sdmmc_host_get_slot_width, sdmmc_host_init,
+    sdmmc_host_init_slot, sdmmc_host_io_int_enable, sdmmc_host_io_int_wait,
     sdmmc_host_set_bus_ddr_mode, sdmmc_host_set_bus_width, sdmmc_host_set_card_clk, sdmmc_host_t,
     sdmmc_slot_config_t, sdmmc_slot_config_t__bindgen_ty_1, sdmmc_slot_config_t__bindgen_ty_2,
+    FATFS,
 };
 
 use esp_idf_svc::wifi::*;
@@ -105,22 +108,16 @@ impl MountedSdFat {
             max_files: 8,
             allocation_unit_size: 8192,
         };
-        let mut card: sdmmc_card_t = sdmmc_card_t {
-            ..Default::default()
-        };
-        let mut card_ptr: *mut sdmmc_card_t = &mut card;
         let mount_point = cp_str(mount_point)?;
         let slot_ptr: *const sdmmc_slot_config_t = &slot_config;
-        esp!(unsafe {
-            esp_vfs_fat_sdmmc_mount(
-                &mount_point as *const i8,
-                &sdmmc_host,
-                slot_ptr as *const c_types::c_void,
-                &mount_config,
-                &mut card_ptr,
-            )
-        })?;
-        card = unsafe { *card_ptr };
+
+        let card = vfs_fat_sdmmc_mount(
+            &mount_point as *const i8,
+            &sdmmc_host,
+            slot_ptr,
+            &mount_config,
+        )?;
+
         info!("capacity: {}", card.csd.capacity);
         info!("sector size: {}", card.csd.sector_size);
         Ok(MountedSdFat {
@@ -136,6 +133,68 @@ impl Drop for MountedSdFat {
         unsafe {
             esp_vfs_fat_sdcard_unmount(&self.mount_point as *const i8, &mut self.card);
         }
+    }
+}
+
+fn vfs_fat_sdmmc_mount(
+    base_path: *const c_types::c_char,
+    host_config: *const sdmmc_host_t,
+    slot_config: *const sdmmc_slot_config_t,
+    _mount_config: *const esp_vfs_fat_mount_config_t,
+) -> Result<sdmmc_card_t> {
+    let mut fatfs: FATFS = FATFS {
+        ..Default::default()
+    };
+
+    let mut drv = 0xFF_u8;
+    unsafe {
+        let mut card: sdmmc_card_t = sdmmc_card_t {
+            ..Default::default()
+        };
+        let pdrv: *mut u8 = &mut drv;
+        let err = ff_diskio_get_drive(pdrv);
+        if err != 0 {
+            bail!("failed to ff_diskio_get_drive {}", err);
+        }
+        info!("got drive '{}'", drv);
+        if let Some(init) = (*host_config).init {
+            info!("call init now");
+            let err = init();
+            if err != 0 {
+                bail!("failed to init host {}", err);
+            }
+        }
+        info!("call sdmmc_host_init_slot now");
+        let err = sdmmc_host_init_slot((*host_config).slot, slot_config);
+        if err != 0 {
+            bail!("failed to sdmmc_host_init_slot {}", err);
+        }
+        let pcard: *mut sdmmc_card_t = &mut card;
+        info!("call sdmmc_card_init now");
+        let err = sdmmc_card_init(host_config, pcard);
+        if err != 0 {
+            bail!("failed to sdmmc_card_init {}", err);
+        }
+        // ________________
+        // mount_to_vfs_fat
+        info!("call ff_diskio_register_sdmmc now");
+        ff_diskio_register_sdmmc(drv, pcard);
+
+        let mut pfatfs: *mut FATFS = &mut fatfs;
+        let ppfatfs: *mut *mut FATFS = &mut pfatfs;
+        let fat_drive: [i8; 3] = [(0x30 + drv).try_into().unwrap(), 0x3a, 0];
+        info!("call esp_vfs_fat_register now");
+        let err = esp_vfs_fat_register(base_path, &fat_drive as *const i8, 8, ppfatfs);
+        if err != 0 {
+            bail!("failed to esp_vfs_fat_register {}", err);
+        }
+
+        info!("call f_mount now");
+        let err = f_mount(pfatfs, base_path, 1);
+        if err != 0 {
+            bail!("failed to f_mount {}", err);
+        }
+        Ok(card)
     }
 }
 
@@ -155,6 +214,7 @@ fn main() -> Result<()> {
         d2: peripherals.pins.gpio12.into_input()?,
         d3: peripherals.pins.gpio13.into_input()?,
     };
+
     let mounted = MountedSdFat::init(pins, "/DATA")?;
 
     let netif_stack = Arc::new(EspNetifStack::new()?);

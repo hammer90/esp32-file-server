@@ -179,12 +179,14 @@ impl MountedFat {
                 free(card as *mut c_types::c_void);
                 bail!("failed to ff_diskio_get_drive {} {}", err, drv);
             }
+            info!("got drive {}", drv);
             // registers sdmmc driver for this disk, copies pcard (pointer) to internal storage
             ff_diskio_register_sdmmc(drv, card);
 
             let mut pfatfs: *mut FATFS = std::ptr::null_mut();
             let ppfatfs: *mut *mut FATFS = &mut pfatfs;
             let fat_drive: [i8; 3] = [(0x30 + drv).try_into().unwrap(), 0x3a, 0];
+            info!("fat drive {:?}", fat_drive);
             let base_path = cp_str(mount_point)?;
             // prepare mount for next not mounted FAT32 partition and allocate memory for fatfs
             let err =
@@ -195,7 +197,7 @@ impl MountedFat {
                 bail!("failed to esp_vfs_fat_register {}", err);
             }
             // finally mount of next not mounted FAT32 partition
-            let err = f_mount(pfatfs, &base_path as *const i8, 1);
+            let err = f_mount(pfatfs, &fat_drive as *const i8, 1);
             if err != 0 {
                 ff_diskio_register(drv, std::ptr::null());
                 let err = esp_vfs_fat_unregister_path(&base_path as *const i8);
@@ -205,7 +207,11 @@ impl MountedFat {
                 free(card as *mut c_types::c_void);
                 bail!("failed to f_mount {}", err);
             }
-
+            info!("capacity: {}", (*card).csd.capacity);
+            info!("sector size: {}", (*card).csd.sector_size);
+            info!("ssize: {}", (*pfatfs).ssize);
+            info!("csize: {}", (*pfatfs).csize);
+            info!("fsize: {}", (*pfatfs).fsize);
             Ok(Self {
                 _sdmmc_card: sdmmc_card,
                 card,
@@ -252,7 +258,8 @@ fn main() -> Result<()> {
     };
 
     let sd = Arc::new(SdmmcCard::new(pins)?);
-    let mounted = MountedFat::mount(sd, "/DATA")?;
+    let config = MountedFat::mount(sd.clone(), "/CONFIG")?;
+    let data = MountedFat::mount(sd, "/DATA")?;
 
     let netif_stack = Arc::new(EspNetifStack::new()?);
     let sys_loop_stack = Arc::new(EspSysLoopStack::new()?);
@@ -269,7 +276,8 @@ fn main() -> Result<()> {
         thread::sleep(Duration::from_millis(100));
     }
 
-    drop(mounted);
+    drop(config);
+    drop(data);
 
     Ok(())
 }
@@ -475,7 +483,7 @@ fn start_server() -> Result<SpawnedRestServer, HttpError> {
 }
 
 fn load_wifi_config() -> Result<WifiConfig> {
-    let file = fs::read_to_string("/DATA/.config.ron")?;
+    let file = fs::read_to_string("/CONFIG/wifi.ron")?;
     let config: WifiConfig = ron::from_str(&file)?;
     Ok(config)
 }

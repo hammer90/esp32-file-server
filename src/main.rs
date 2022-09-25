@@ -179,14 +179,14 @@ impl MountedFat {
                 free(card as *mut c_types::c_void);
                 bail!("failed to ff_diskio_get_drive {} {}", err, drv);
             }
-            // registers sdmmc driver for this disk, copies pcard (pointer) to internal storage
+            // registers sdmmc driver for this disk, copies pcard (pointer only, not mem) to internal storage
             ff_diskio_register_sdmmc(drv, card);
 
             let mut pfatfs: *mut FATFS = std::ptr::null_mut();
             let ppfatfs: *mut *mut FATFS = &mut pfatfs;
             let fat_drive: [i8; 3] = [(0x30 + drv).try_into().unwrap(), 0x3a, 0];
             let base_path = cp_str(mount_point)?;
-            // prepare mount for next not mounted FAT32 partition and allocate memory for fatfs
+            // connect base_path to fat_drive and allocate memory for fatfs
             let err =
                 esp_vfs_fat_register(&base_path as *const i8, &fat_drive as *const i8, 8, ppfatfs);
             if err != 0 {
@@ -194,7 +194,7 @@ impl MountedFat {
                 free(card as *mut c_types::c_void);
                 bail!("failed to esp_vfs_fat_register {}", err);
             }
-            // finally mount of next not mounted FAT32 partition
+            // finally mount first FAT32 partition
             let err = f_mount(pfatfs, &base_path as *const i8, 1);
             if err != 0 {
                 ff_diskio_register(drv, std::ptr::null());
@@ -252,7 +252,7 @@ fn main() -> Result<()> {
     };
 
     let sd = Arc::new(SdmmcCard::new(pins)?);
-    let mounted = MountedFat::mount(sd, "/DATA")?;
+    let mounted = MountedFat::mount(sd, "/sd")?;
 
     let netif_stack = Arc::new(EspNetifStack::new()?);
     let sys_loop_stack = Arc::new(EspSysLoopStack::new()?);
@@ -326,14 +326,7 @@ impl Streamable for ReadableFile {
 }
 
 fn read_file(name: &str) -> Result<Response> {
-    if name.starts_with('.') {
-        return Ok(Response::fixed_string(
-            404,
-            None,
-            &format!("File '{}' does not exist", name),
-        ));
-    }
-    let file = File::open(format!("/DATA/{}", name));
+    let file = File::open(format!("/sd/data/{}", name));
     match file {
         Ok(file) => Ok(Response {
             status: 200,
@@ -357,14 +350,7 @@ fn read_file(name: &str) -> Result<Response> {
 }
 
 fn file_size(name: &str) -> Result<Response> {
-    if name.starts_with('.') {
-        return Ok(Response::fixed_string(
-            404,
-            None,
-            &format!("File '{}' does not exist", name),
-        ));
-    }
-    let meta = fs::metadata(format!("/DATA/{}", name));
+    let meta = fs::metadata(format!("/sd/data/{}", name));
     match meta {
         Ok(meta) => Ok(Response::fixed_string(
             200,
@@ -388,7 +374,7 @@ fn file_size(name: &str) -> Result<Response> {
 }
 
 fn files() -> Result<Response> {
-    let files: Vec<String> = Files::new("/DATA")?
+    let files: Vec<String> = Files::new("/sd/data")?
         .filter(|file| !file.starts_with('.'))
         .collect();
     Ok(Response::fixed_string(
@@ -407,7 +393,7 @@ impl FileWriter {
         let file = File::options()
             .write(true)
             .create_new(true)
-            .open(format!("/DATA/{}", name))?;
+            .open(format!("/sd/data/{}", name))?;
         Ok(Self { file })
     }
 }
@@ -475,7 +461,7 @@ fn start_server() -> Result<SpawnedRestServer, HttpError> {
 }
 
 fn load_wifi_config() -> Result<WifiConfig> {
-    let file = fs::read_to_string("/DATA/.config.ron")?;
+    let file = fs::read_to_string("/sd/config/wifi.ron")?;
     let config: WifiConfig = ron::from_str(&file)?;
     Ok(config)
 }

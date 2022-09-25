@@ -20,7 +20,9 @@ To achieve reproducible builds the ESP-IDF version is fixed to a Tag inside [.ca
 The first FAT32 formatted partition will be used.
 Other partitions (non FAT32 partitions and additional FAT32 partitions) will be ignored.
 
-The first FAT32 partition must contain a `.config.ron` file with the WLAN credentails:
+The first FAT32 partition must contain a `config` and a `data` folder.
+The `data` filder will be aviable by the api.
+The `config` folder must contain a `wifi.ron` file with the WLAN credentails:
 
 ```rust
 (

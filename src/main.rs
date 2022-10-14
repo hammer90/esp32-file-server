@@ -135,6 +135,18 @@ impl SdmmcCard {
             })
         }
     }
+
+    pub fn size(&self) -> i64 {
+        unsafe {
+            let capacity: i64 = (*self.card).csd.capacity.into();
+            let sector_size: i64 = (*self.card).csd.sector_size.into();
+            capacity * sector_size
+        }
+    }
+
+    pub fn read_block_len(&self) -> i32 {
+        unsafe { (*self.card).csd.read_block_len }
+    }
 }
 
 impl Drop for SdmmcCard {
@@ -152,6 +164,14 @@ struct MountedFat {
     base_path: [i8; 32],
     drv: u8,
     fat_drive: [i8; 3],
+    fatfs: *mut FATFS,
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+struct FatFsStatistics {
+    sectors_per_cluster: u16,
+    sectors_per_fat: u32,
+    sector_size: u16,
 }
 
 impl MountedFat {
@@ -212,7 +232,18 @@ impl MountedFat {
                 base_path,
                 drv,
                 fat_drive,
+                fatfs: pfatfs,
             })
+        }
+    }
+
+    pub fn statistics(&self) -> FatFsStatistics {
+        unsafe {
+            FatFsStatistics {
+                sectors_per_cluster: (*self.fatfs).csize,
+                sector_size: (*self.fatfs).ssize,
+                sectors_per_fat: (*self.fatfs).fsize,
+            }
         }
     }
 }
@@ -252,7 +283,16 @@ fn main() -> Result<()> {
     };
 
     let sd = Arc::new(SdmmcCard::new(pins)?);
+    let size = sd.size();
+    let read_block_len = sd.read_block_len();
+    info!(
+        "card size: {} MB, read block size: {}",
+        size / (1024 * 1024),
+        read_block_len
+    );
     let mounted = MountedFat::mount(sd, "/sd")?;
+    let statistics = mounted.statistics();
+    info!("{:?}", statistics);
 
     let netif_stack = Arc::new(EspNetifStack::new()?);
     let sys_loop_stack = Arc::new(EspSysLoopStack::new()?);

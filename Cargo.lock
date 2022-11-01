@@ -473,6 +473,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "esp32-sdcard"
+version = "0.1.0"
+source = "git+https://github.com/hammer90/esp32-sdcard#b72f46c542857f7998e3fbd765b6798e6b6ae9e8"
+dependencies = [
+ "anyhow",
+ "embuild 0.28.5",
+ "esp-idf-hal",
+ "esp-idf-sys",
+ "log",
+]
+
+[[package]]
 name = "esp32_file_server"
 version = "0.1.0"
 dependencies = [
@@ -484,6 +496,7 @@ dependencies = [
  "esp-idf-hal",
  "esp-idf-svc",
  "esp-idf-sys",
+ "esp32-sdcard",
  "log",
  "ron",
  "serde",

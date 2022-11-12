@@ -11,8 +11,8 @@ use anyhow::{anyhow, bail, Result};
 use serde::{Deserialize, Serialize};
 
 use embeddable_rest_server::{
-    BodyType, FixedHandler, HandlerResult, HttpError, RequestHandler, Response, RestServer,
-    SimpleHandler, SpawnedRestServer, Streamable,
+    BodyType, CancelHandler, HandlerResult, HttpError, RequestHandler, Response, RestServer,
+    SpawnedRestServer, Streamable,
 };
 use embedded_svc::wifi::Configuration;
 use esp_idf_svc::netif::EspNetifStack;
@@ -231,37 +231,31 @@ impl RequestHandler for FileWriter {
 
 fn start_server() -> Result<SpawnedRestServer, HttpError> {
     let server = RestServer::new("0.0.0.0".to_string(), 8080, 1024, 0)?
-        .get("files", |req, context| {
-            SimpleHandler::new(req, context, |_, _, _| {
-                let res = files();
-                match res {
-                    Err(msg) => Response::fixed_string(500, None, format!("{}", msg).as_str()),
-                    Ok(res) => res,
-                }
-            })
+        .get("files", |_, _| {
+            let res = files();
+            match res {
+                Err(msg) => Response::fixed_string(500, None, format!("{}", msg).as_str()),
+                Ok(res) => res,
+            }
         })?
-        .get("files/:name/size", |req, context| {
-            SimpleHandler::new(req, context, |req, _, _| {
-                let res = file_size(req.params["name"].as_str());
-                match res {
-                    Err(msg) => Response::fixed_string(500, None, format!("{}", msg).as_str()),
-                    Ok(res) => res,
-                }
-            })
+        .get("files/:name/size", |req, _| {
+            let res = file_size(req.params["name"].as_str());
+            match res {
+                Err(msg) => Response::fixed_string(500, None, format!("{}", msg).as_str()),
+                Ok(res) => res,
+            }
         })?
-        .get("files/:name", |req, context| {
-            SimpleHandler::new(req, context, |req, _, _| {
-                let res = read_file(req.params["name"].as_str());
-                match res {
-                    Err(msg) => Response::fixed_string(500, None, format!("{}", msg).as_str()),
-                    Ok(res) => res,
-                }
-            })
+        .get("files/:name", |req, _| {
+            let res = read_file(req.params["name"].as_str());
+            match res {
+                Err(msg) => Response::fixed_string(500, None, format!("{}", msg).as_str()),
+                Ok(res) => res,
+            }
         })?
         .post("files/:name", |req, _| {
             let writer = FileWriter::open(req.params["name"].as_str());
             match writer {
-                Err(msg) => FixedHandler::new(500, None, format!("{}", msg).as_str()),
+                Err(msg) => CancelHandler::new(500, None, format!("{}", msg).as_str()),
                 Ok(writer) => Box::new(writer),
             }
         })?;

@@ -23,15 +23,15 @@ opt-level = "z"
 [features]
 default = ["experimental"]
 
-experimental = ["esp-idf-svc/experimental", "esp-idf-hal/experimental", "embedded-svc/experimental"]
+experimental = ["esp-idf-svc/experimental", "embedded-svc/experimental"]
 
 [dependencies]
 anyhow = {version = "1", features = ["backtrace"]}
 log = "0.4"
-esp-idf-sys = { version = "0.31", features = ["binstart"] }
-esp-idf-svc = "0.40"
-esp-idf-hal = "0.36"
-embedded-svc = "0.20"
+esp-idf-sys = { version = "0.32", features = ["binstart"] }
+esp-idf-svc = "0.45"
+esp-idf-hal = "0.40"
+embedded-svc = "0.24"
 embedded-hal = "0.2"
 embeddable_rest_server = { git = "https://github.com/hammer90/embeddable-rest-server" }
 esp32-sdcard = { git = "https://github.com/hammer90/esp32-sdcard" }
@@ -39,5 +39,5 @@ ron = "0.8"
 serde = { version = "1", features = ["derive"] }
 
 [build-dependencies]
-embuild = "0.28.2"
+embuild = { version = "0.31", features = ["elf"] }
 anyhow = "1"

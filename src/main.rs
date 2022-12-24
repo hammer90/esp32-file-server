@@ -3,11 +3,14 @@
 use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::{ErrorKind, Read, Write};
+use std::net::Ipv4Addr;
 use std::sync::Arc;
 use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use anyhow::{anyhow, bail, Result};
+use esp_idf_hal::peripheral;
+use esp_idf_svc::eventloop::EspSystemEventLoop;
 use serde::{Deserialize, Serialize};
 
 use embeddable_rest_server::{
@@ -15,17 +18,15 @@ use embeddable_rest_server::{
     SpawnedRestServer, Streamable,
 };
 use embedded_svc::wifi::Configuration;
-use esp_idf_svc::netif::EspNetifStack;
+use esp_idf_svc::netif::{EspNetif, EspNetifWait, NetifConfiguration, NetifStack};
 use esp_idf_svc::sntp;
-use esp_idf_svc::sysloop::EspSysLoopStack;
 use log::*;
 
 use esp_idf_hal::peripherals::Peripherals;
 
 use esp_idf_svc::wifi::*;
 
-use embedded_svc::ipv4::ClientConfiguration::*;
-use embedded_svc::ipv4::DHCPClientSettings;
+use embedded_svc::ipv4;
 use embedded_svc::wifi::*;
 use esp32_sdcard::*;
 use esp_idf_svc::nvs::*;
@@ -42,12 +43,12 @@ fn main() -> Result<()> {
     let peripherals = Peripherals::take().ok_or_else(|| anyhow!("no input pins"))?;
 
     let pins = SdPins {
-        cmd: peripherals.pins.gpio15.into_input()?,
-        clk: peripherals.pins.gpio14.into_input()?,
-        d0: peripherals.pins.gpio2.into_input()?,
-        d1: peripherals.pins.gpio4.into_input()?,
-        d2: peripherals.pins.gpio12.into_input()?,
-        d3: peripherals.pins.gpio13.into_input()?,
+        cmd: peripherals.pins.gpio15,
+        clk: peripherals.pins.gpio14,
+        d0: peripherals.pins.gpio2,
+        d1: peripherals.pins.gpio4,
+        d2: peripherals.pins.gpio12,
+        d3: peripherals.pins.gpio13,
     };
 
     let sd = Arc::new(SdmmcCard::new(pins)?);
@@ -62,11 +63,8 @@ fn main() -> Result<()> {
     let statistics = mounted.statistics();
     info!("{:?}", statistics);
 
-    let netif_stack = Arc::new(EspNetifStack::new()?);
-    let sys_loop_stack = Arc::new(EspSysLoopStack::new()?);
-    let default_nvs = Arc::new(EspDefaultNvs::new()?);
-
-    let _wifi = wifi(netif_stack, sys_loop_stack, default_nvs)?;
+    let sysloop = EspSystemEventLoop::take()?;
+    let _wifi = wifi(peripherals.modem, sysloop)?;
 
     let _sntp = sntp::EspSntp::new_default()?;
     info!("SNTP initialized");
@@ -230,35 +228,41 @@ impl RequestHandler for FileWriter {
 }
 
 fn start_server() -> Result<SpawnedRestServer, HttpError> {
-    let server = RestServer::new("0.0.0.0".to_string(), 8080, 1024, 0)?
-        .get("files", |_, _| {
-            let res = files();
-            match res {
-                Err(msg) => Response::fixed_string(500, None, format!("{}", msg).as_str()),
-                Ok(res) => res,
-            }
-        })?
-        .get("files/:name/size", |req, _| {
-            let res = file_size(req.params["name"].as_str());
-            match res {
-                Err(msg) => Response::fixed_string(500, None, format!("{}", msg).as_str()),
-                Ok(res) => res,
-            }
-        })?
-        .get("files/:name", |req, _| {
-            let res = read_file(req.params["name"].as_str());
-            match res {
-                Err(msg) => Response::fixed_string(500, None, format!("{}", msg).as_str()),
-                Ok(res) => res,
-            }
-        })?
-        .post("files/:name", |req, _| {
-            let writer = FileWriter::open(req.params["name"].as_str());
-            match writer {
-                Err(msg) => CancelHandler::new(500, None, format!("{}", msg).as_str()),
-                Ok(writer) => Box::new(writer),
-            }
-        })?;
+    let server = RestServer::new(
+        "0.0.0.0".to_string(),
+        8080,
+        1024,
+        0,
+        Some(Duration::from_secs(1)),
+    )?
+    .get("files", |_, _| {
+        let res = files();
+        match res {
+            Err(msg) => Response::fixed_string(500, None, format!("{}", msg).as_str()),
+            Ok(res) => res,
+        }
+    })?
+    .get("files/:name/size", |req, _| {
+        let res = file_size(req.params["name"].as_str());
+        match res {
+            Err(msg) => Response::fixed_string(500, None, format!("{}", msg).as_str()),
+            Ok(res) => res,
+        }
+    })?
+    .get("files/:name", |req, _| {
+        let res = read_file(req.params["name"].as_str());
+        match res {
+            Err(msg) => Response::fixed_string(500, None, format!("{}", msg).as_str()),
+            Ok(res) => res,
+        }
+    })?
+    .post("files/:name", |req, _| {
+        let writer = FileWriter::open(req.params["name"].as_str());
+        match writer {
+            Err(msg) => CancelHandler::new(500, None, format!("{}", msg).as_str()),
+            Ok(writer) => Box::new(writer),
+        }
+    })?;
     SpawnedRestServer::spawn(server, 8192)
 }
 
@@ -268,48 +272,59 @@ fn load_wifi_config() -> Result<WifiConfig> {
     Ok(config)
 }
 
-fn duration_since_boot() -> Duration {
-    let now = SystemTime::now();
-    now.duration_since(UNIX_EPOCH).unwrap_or(Duration::ZERO)
-}
-
 fn wifi(
-    netif_stack: Arc<EspNetifStack>,
-    sys_loop_stack: Arc<EspSysLoopStack>,
-    default_nvs: Arc<EspDefaultNvs>,
-) -> Result<Box<EspWifi>> {
-    let mut wifi = Box::new(EspWifi::new(netif_stack, sys_loop_stack, default_nvs)?);
+    modem: impl peripheral::Peripheral<P = esp_idf_hal::modem::Modem> + 'static,
+    sysloop: EspSystemEventLoop,
+) -> Result<Box<EspWifi<'static>>> {
+    let default_nvs = EspDefaultNvsPartition::take()?;
+    let mut wifi = Box::new(EspWifi::new(modem, sysloop.clone(), Some(default_nvs))?);
 
     info!("Wifi created, about to connect...");
 
     let config = load_wifi_config()?;
     println!("{:?}", config);
     wifi.set_configuration(&Configuration::Client(ClientConfiguration {
-        ssid: config.ssid,
-        password: config.pw,
-        ip_conf: Some(DHCP(DHCPClientSettings {
-            hostname: Some("fileserver".into()),
-        })),
+        ssid: config.ssid.as_str().into(),
+        password: config.pw.as_str().into(),
         ..Default::default()
     }))?;
 
-    wifi.wait_status_with_timeout(Duration::from_secs(20) + duration_since_boot(), |status| {
-        !status.is_transitional()
-    })
-    .map_err(|e| anyhow::anyhow!("Unexpected Wifi status while waiting: {:?}", e))?;
+    let sta_netif = EspNetif::new_with_conf(&NetifConfiguration {
+        key: "WIFI_STA_CUSTOM".into(),
+        description: "sta".into(),
+        route_priority: 100,
+        ip_configuration: ipv4::Configuration::Client(ipv4::ClientConfiguration::DHCP(
+            ipv4::DHCPClientSettings {
+                hostname: Some("fileserver".into()),
+            },
+        )),
+        stack: NetifStack::Sta,
+        custom_mac: None,
+    })?;
 
-    let status = wifi.get_status();
+    let ap_unused_netif = EspNetif::new_with_conf(&NetifConfiguration {
+        key: "WIFI_AP_CUSTOM".into(),
+        description: "ap".into(),
+        route_priority: 10,
+        ip_configuration: ipv4::Configuration::Router(Default::default()),
+        stack: NetifStack::Ap,
+        custom_mac: None,
+    })?;
 
-    if let Status(
-        ClientStatus::Started(ClientConnectionStatus::Connected(ClientIpStatus::Done(
-            _ip_settings,
-        ))),
-        _,
-    ) = status
-    {
-        info!("Wifi connected");
-    } else {
-        bail!("Unexpected Wifi status after waiting: {:?}", status);
+    wifi.swap_netif(sta_netif, ap_unused_netif)?;
+
+    wifi.start()?;
+
+    wifi.connect()?;
+
+    if !EspNetifWait::new::<EspNetif>(wifi.sta_netif(), &sysloop)?.wait_with_timeout(
+        Duration::from_secs(20),
+        || {
+            wifi.is_connected().unwrap()
+                && wifi.sta_netif().get_ip_info().unwrap().ip != Ipv4Addr::new(0, 0, 0, 0)
+        },
+    ) {
+        bail!("Wifi did not connect or did not receive a DHCP lease");
     }
     Ok(wifi)
 }

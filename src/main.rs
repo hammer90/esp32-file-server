@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::{ErrorKind, Read, Write};
-use std::net::Ipv4Addr;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
@@ -17,19 +17,22 @@ use embeddable_rest_server::{
     BodyType, CancelHandler, HandlerResult, HttpError, RequestHandler, Response, RestServer,
     SpawnedRestServer, Streamable,
 };
-use embedded_svc::wifi::Configuration;
-use esp_idf_svc::netif::{EspNetif, EspNetifWait, NetifConfiguration, NetifStack};
+use embedded_svc::{
+    ipv4::{
+        ClientConfiguration as IpClientConfiguration, Configuration as IpConfiguration,
+        DHCPClientSettings,
+    },
+    wifi::{self, ClientConfiguration as WifiClientConfiguration},
+};
+use esp_idf_svc::netif::{EspNetif, NetifConfiguration, NetifStack};
+use esp_idf_svc::wifi::{BlockingWifi, EspWifi, WifiDriver};
+
 use esp_idf_svc::sntp;
 use log::*;
 
 use esp_idf_hal::peripherals::Peripherals;
 
-use esp_idf_svc::wifi::*;
-
-use embedded_svc::ipv4;
-use embedded_svc::wifi::*;
 use esp32_sdcard::*;
-use esp_idf_svc::nvs::*;
 
 mod readdir;
 use readdir::Files;
@@ -40,7 +43,7 @@ fn main() -> Result<()> {
     // Bind the log crate to the ESP Logging facilities
     esp_idf_svc::log::EspLogger::initialize_default();
 
-    let peripherals = Peripherals::take().ok_or_else(|| anyhow!("no input pins"))?;
+    let peripherals = Peripherals::take()?;
 
     let pins = SdPins {
         cmd: peripherals.pins.gpio15,
@@ -63,8 +66,7 @@ fn main() -> Result<()> {
     let statistics = mounted.statistics();
     info!("{:?}", statistics);
 
-    let sysloop = EspSystemEventLoop::take()?;
-    let _wifi = wifi(peripherals.modem, sysloop)?;
+    let _wifi = wifi(peripherals.modem)?;
 
     let _sntp = sntp::EspSntp::new_default()?;
     info!("SNTP initialized");
@@ -274,57 +276,43 @@ fn load_wifi_config() -> Result<WifiConfig> {
 
 fn wifi(
     modem: impl peripheral::Peripheral<P = esp_idf_hal::modem::Modem> + 'static,
-    sysloop: EspSystemEventLoop,
-) -> Result<Box<EspWifi<'static>>> {
-    let default_nvs = EspDefaultNvsPartition::take()?;
-    let mut wifi = Box::new(EspWifi::new(modem, sysloop.clone(), Some(default_nvs))?);
-
-    info!("Wifi created, about to connect...");
-
+) -> Result<BlockingWifi<EspWifi<'static>>> {
     let config = load_wifi_config()?;
     println!("{:?}", config);
-    wifi.set_configuration(&Configuration::Client(ClientConfiguration {
-        ssid: config.ssid.as_str().into(),
-        password: config.pw.as_str().into(),
+
+    let sysloop = EspSystemEventLoop::take()?;
+
+    let mut driver = WifiDriver::new(modem, sysloop.clone(), None)?;
+
+    driver.set_configuration(&wifi::Configuration::Client(WifiClientConfiguration {
+        ssid: heapless::String::from_str(&config.ssid).unwrap(),
+        password: heapless::String::from_str(&config.pw).unwrap(),
         ..Default::default()
     }))?;
 
     let sta_netif = EspNetif::new_with_conf(&NetifConfiguration {
-        key: "WIFI_STA_CUSTOM".into(),
-        description: "sta".into(),
-        route_priority: 100,
-        ip_configuration: ipv4::Configuration::Client(ipv4::ClientConfiguration::DHCP(
-            ipv4::DHCPClientSettings {
-                hostname: Some("fileserver".into()),
+        ip_configuration: IpConfiguration::Client(IpClientConfiguration::DHCP(
+            DHCPClientSettings {
+                hostname: Some("fileserver".try_into().unwrap()),
             },
         )),
-        stack: NetifStack::Sta,
-        custom_mac: None,
+        ..NetifStack::Sta.default_configuration()
     })?;
+    let ap_netif = EspNetif::new(NetifStack::Ap)?;
 
-    let ap_unused_netif = EspNetif::new_with_conf(&NetifConfiguration {
-        key: "WIFI_AP_CUSTOM".into(),
-        description: "ap".into(),
-        route_priority: 10,
-        ip_configuration: ipv4::Configuration::Router(Default::default()),
-        stack: NetifStack::Ap,
-        custom_mac: None,
-    })?;
+    let mut wifi = BlockingWifi::wrap(EspWifi::wrap_all(driver, sta_netif, ap_netif)?, sysloop)?;
 
-    wifi.swap_netif(sta_netif, ap_unused_netif)?;
-
+    println!("Starting wifi...");
     wifi.start()?;
 
+    println!("Connecting wifi...");
     wifi.connect()?;
 
-    if !EspNetifWait::new::<EspNetif>(wifi.sta_netif(), &sysloop)?.wait_with_timeout(
-        Duration::from_secs(20),
-        || {
-            wifi.is_connected().unwrap()
-                && wifi.sta_netif().get_ip_info().unwrap().ip != Ipv4Addr::new(0, 0, 0, 0)
-        },
-    ) {
-        bail!("Wifi did not connect or did not receive a DHCP lease");
-    }
+    println!("Waiting for DHCP lease...");
+    wifi.wait_netif_up()?;
+
+    let ip_info = wifi.wifi().sta_netif().get_ip_info()?;
+    println!("Wifi DHCP info: {:?}", ip_info);
+
     Ok(wifi)
 }

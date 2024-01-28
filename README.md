@@ -31,3 +31,5 @@ pw: "your wlan password",
 )
 
 ```
+
+Last compiled with v1.75.0-nightly.
